@@ -1,15 +1,260 @@
 <!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>FPS | Organized</title>
-    <!-- JS -->
-    <script type="module" src="./src/main_modular.js"></script>
-    <link rel="stylesheet" href="./styles/style.css" />
-  </head>
-  <body>
-    <!-- <h1>Test</h1> -->
-    <div id="container"></div>
-  </body>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Geiles 3D Ego-Shooter – GitHub Pages 2026</title>
+  <style>
+    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; }
+    #ui {
+      position: absolute; top: 10px; left: 10px; color: #0f0; font-size: 18px; pointer-events:none;
+      text-shadow: 0 0 6px #0f0;
+    }
+    #crosshair {
+      position: absolute; top: 50%; left: 50%; color: #ff0044; font-size: 42px; transform: translate(-50%, -50%);
+      pointer-events: none; text-shadow: 0 0 10px #f00;
+    }
+    #blocker {
+      position: absolute; width: 100%; height: 100%; background: rgba(0,0,0,0.85);
+      color: #fff; display: flex; align-items: center; justify-content: center; flex-direction: column;
+      cursor: pointer; font-size: 24px; text-align: center;
+    }
+    #instructions { max-width: 600px; padding: 30px; background: rgba(0,0,0,0.6); border-radius: 16px; }
+  </style>
+</head>
+<body>
+
+<div id="blocker"><div id="instructions">Klick um zu spielen!<br>WASD = Move   Shift = Sprint   C = Crouch<br>Maus = Schauen   Linksklick = Schießen<br>ESC = Maus freigeben</div></div>
+<div id="ui">Health: 100   Ammo: ∞</div>
+<div id="crosshair">+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.168.0/build/three.module.js';
+import { PointerLockControls } from 'https://cdn.jsdelivr.net/npm/three@0.168.0/examples/jsm/controls/PointerLockControls.js';
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a001f);
+scene.fog = new THREE.FogExp2(0x0a001f, 0.00018);
+
+const camera = new THREE.PerspectiveCamera(80, innerWidth/innerHeight, 0.1, 3000);
+camera.position.set(0, 1.7, 5);
+
+const renderer = new THREE.WebGLRenderer({antialias:true, powerPreference:"high-performance"});
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const controls = new PointerLockControls(camera, document.body);
+const blocker = document.getElementById('blocker');
+blocker.addEventListener('click', () => controls.lock());
+
+controls.addEventListener('lock',   () => blocker.style.display = 'none');
+controls.addEventListener('unlock', () => blocker.style.display = '');
+
+// ─── Licht & Umgebung ───
+const ambient = new THREE.AmbientLight(0x4040ff, 0.4);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xff88aa, 1.5);
+sun.position.set(80, 120, 60);
+sun.castShadow = true;
+sun.shadow.mapSize.width = 2048;
+sun.shadow.mapSize.height = 2048;
+scene.add(sun);
+
+// Boden (große Arena)
+const floorGeo = new THREE.CircleGeometry(600, 64);
+const floorMat = new THREE.MeshStandardMaterial({color: 0x111133, roughness:0.9});
+const floor = new THREE.Mesh(floorGeo, floorMat);
+floor.rotation.x = -Math.PI/2;
+floor.receiveShadow = true;
+scene.add(floor);
+
+// Wände / Arena-Boxen
+for (let i = 0; i < 18; i++) {
+  const h = 8 + Math.random()*12;
+  const box = new THREE.Mesh(
+    new THREE.BoxGeometry(10 + Math.random()*14, h, 10 + Math.random()*14),
+    new THREE.MeshStandardMaterial({color: 0x220044 + Math.random()*0x222222, metalness:0.2, roughness:0.8})
+  );
+  box.position.set(
+    (Math.random()-0.5)*900,
+    h/2,
+    (Math.random()-0.5)*900
+  );
+  box.castShadow = box.receiveShadow = true;
+  scene.add(box);
+}
+
+// Waffe (einfaches Screen-Space Modell)
+const gunGroup = new THREE.Group();
+gunGroup.position.set(0.4, -0.5, -0.8);
+camera.add(gunGroup);
+
+const barrel = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.06, 0.08, 1.2, 12),
+  new THREE.MeshStandardMaterial({color:0x333333, metalness:0.9})
+);
+barrel.rotation.x = Math.PI/2;
+barrel.position.z = -0.6;
+gunGroup.add(barrel);
+
+// ─── Physik & Bewegung ───
+const velocity = new THREE.Vector3();
+const direction = new THREE.Vector3();
+let move = { fwd:false, bwd:false, left:false, right:false, sprint:false, crouch:false };
+let onGround = true;
+let health = 100;
+
+const keys = {};
+window.addEventListener('keydown', e => { keys[e.code] = true; if(e.code==='KeyC') move.crouch=true; });
+window.addEventListener('keyup',   e => { keys[e.code] = false; if(e.code==='KeyC') move.crouch=false; });
+
+function updateMovement() {
+  move.fwd   = keys['KeyW'] || false;
+  move.bwd   = keys['KeyS'] || false;
+  move.left  = keys['KeyA'] || false;
+  move.right = keys['KeyD'] || false;
+  move.sprint = keys['ShiftLeft'] || false;
+}
+
+// Schießen
+const bullets = [];
+const raycaster = new THREE.Raycaster();
+let canShoot = true;
+
+function shoot() {
+  if (!canShoot || !controls.isLocked) return;
+  canShoot = false;
+  setTimeout(() => canShoot = true, 180);
+
+  // Muzzle Flash
+  const flash = new THREE.PointLight(0xff4400, 4, 30);
+  flash.position.copy(camera.position).add(camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(-1.2));
+  scene.add(flash);
+  setTimeout(() => scene.remove(flash), 80);
+
+  // Kugel
+  const bulletGeo = new THREE.SphereGeometry(0.12, 8, 8);
+  const bulletMat = new THREE.MeshBasicMaterial({color:0xffaa00});
+  const bullet = new THREE.Mesh(bulletGeo, bulletMat);
+  bullet.position.copy(camera.position);
+  bullet.velocity = camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(120);
+  scene.add(bullet);
+  bullets.push(bullet);
+
+  // Sound (Browser Audio)
+  const snd = new Audio('https://assets.codepen.io/243235/shot.mp3'); // kostenloser Shot-Sound (oder eigenen hochladen)
+  snd.volume = 0.5; snd.play().catch(()=>{});
+}
+
+// Gegner (einfache Bots)
+const enemies = [];
+for (let i = 0; i < 8; i++) {
+  const enemy = new THREE.Mesh(
+    new THREE.SphereGeometry(2.2, 16, 12),
+    new THREE.MeshStandardMaterial({color:0xff0044, emissive:0x440000, emissiveIntensity:0.6})
+  );
+  enemy.position.set(
+    (Math.random()-0.5)*400,
+    2.2,
+    (Math.random()-0.5)*400
+  );
+  enemy.health = 3;
+  scene.add(enemy);
+  enemies.push(enemy);
+}
+
+// ─── Loop ───
+const clock = new THREE.Clock();
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = clock.getDelta();
+
+  if (controls.isLocked) {
+    updateMovement();
+
+    direction.z = Number(move.fwd) - Number(move.bwd);
+    direction.x = Number(move.right) - Number(move.left);
+    direction.normalize();
+
+    const speed = move.sprint ? 45 : 22;
+    velocity.x = direction.x * speed * dt * (move.crouch ? 0.4 : 1);
+    velocity.z = direction.z * speed * dt * (move.crouch ? 0.4 : 1);
+
+    controls.moveRight(velocity.x);
+    controls.moveForward(velocity.z);
+
+    // Schwerkraft + Jump
+    if (camera.position.y > 1.7) {
+      velocity.y -= 32 * dt;
+      onGround = false;
+    } else {
+      camera.position.y = 1.7;
+      velocity.y = 0;
+      onGround = true;
+    }
+    if (keys['Space'] && onGround) {
+      velocity.y = 12;
+      keys['Space'] = false;
+    }
+    camera.position.y += velocity.y * dt;
+
+    // Schießen per Linksklick
+    if (keys['Mouse0'] || (document.pointerLockElement && mouseDown)) shoot();
+
+    // Bullets updaten + Kollision mit Gegnern
+    for (let i = bullets.length-1; i>=0; i--) {
+      const b = bullets[i];
+      b.position.add(b.velocity.clone().multiplyScalar(dt));
+
+      // Entfernen wenn zu weit
+      if (b.position.length() > 1200) {
+        scene.remove(b);
+        bullets.splice(i,1);
+        continue;
+      }
+
+      // Treffer Gegner
+      for (let e of enemies) {
+        if (b.position.distanceTo(e.position) < 2.6) {
+          e.health--;
+          if (e.health <= 0) {
+            scene.remove(e);
+            enemies.splice(enemies.indexOf(e),1);
+          }
+          scene.remove(b);
+          bullets.splice(i,1);
+          break;
+        }
+      }
+    }
+
+    // Einfache Gegner KI (langsam auf dich zu)
+    enemies.forEach(e => {
+      const toPlayer = camera.position.clone().sub(e.position).normalize();
+      e.position.add(toPlayer.multiplyScalar(6 * dt));
+      if (camera.position.distanceTo(e.position) < 3) {
+        health -= 30 * dt;
+        if (health <= 0) alert("Game Over – refresh!");
+      }
+    });
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+let mouseDown = false;
+window.addEventListener('mousedown', e => { if(e.button===0) mouseDown = true; });
+window.addEventListener('mouseup',   e => { if(e.button===0) mouseDown = false; });
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
 </html>

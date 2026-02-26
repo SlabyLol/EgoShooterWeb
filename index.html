@@ -3,9 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Multiplayer Ego-Shooter mit Playroom.gg Lobby</title>
+  <title>Multiplayer FPS – Playroom Lobby Test</title>
 
-  <!-- Import Map für Three.js -->
   <script type="importmap">
   {
     "imports": {
@@ -17,186 +16,156 @@
   </script>
 
   <style>
-    body { margin:0; overflow:hidden; background:#000; font-family:Arial, sans-serif; touch-action:none; }
-    #ui { position:absolute; top:10px; left:10px; color:#0f0; font-size:18px; pointer-events:none; text-shadow:0 0 6px #0f0; z-index:10; }
-    #crosshair { position:absolute; top:50%; left:50%; color:#ff0044; font-size:50px; transform:translate(-50%,-50%); pointer-events:none; text-shadow:0 0 10px #f00; z-index:5; }
-    .touch-ctrl { position:absolute; bottom:20px; z-index:15; pointer-events:none; }
-    #move-joy { left:30px; width:140px; height:140px; background:rgba(80,80,255,0.25); border-radius:50%; border:2px solid #88f; opacity:0.7; }
-    #look-joy { right:30px; width:160px; height:160px; background:rgba(255,80,80,0.18); border-radius:50%; border:2px solid #f88; opacity:0.6; }
-    .joy-knob { width:60px; height:60px; background:rgba(255,255,255,0.4); border-radius:50%; position:absolute; transform:translate(-50%,-50%); pointer-events:none; }
+    body { margin:0; overflow:hidden; background:#000; font-family:sans-serif; touch-action:none; color:#fff; }
+    #ui          { position:absolute; top:8px; left:8px; font-size:18px; pointer-events:none; text-shadow:0 0 5px #000; z-index:10; }
+    #crosshair   { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:48px; color:#ff3366; pointer-events:none; z-index:5; }
+    #start-screen{ position:absolute; inset:0; background:rgba(0,0,0,0.85); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:20; }
+    #start-screen button { padding:16px 48px; font-size:24px; background:#ff3366; border:none; border-radius:12px; color:white; cursor:pointer; margin:20px; }
+    #debug       { position:absolute; bottom:10px; left:10px; font-size:14px; color:#0f0; background:rgba(0,0,0,0.6); padding:8px; max-width:400px; z-index:15; }
   </style>
 </head>
 <body>
 
-<div id="ui">Health: <span id="health">100</span>   |   Spieler: <span id="playerCount">1</span></div>
+<div id="start-screen">
+  <h1>Playroom Multiplayer FPS</h1>
+  <p>Klicke auf „Lobby starten“, um die Playroom-Lobby zu öffnen</p>
+  <button id="launchBtn">Lobby starten</button>
+  <p id="status" style="margin-top:20px; font-size:18px;">Warte auf Klick...</p>
+</div>
+
+<div id="ui">
+  Health: <span id="health">100</span>  |  Spieler: <span id="playerCount">1</span>
+</div>
+
 <div id="crosshair">+</div>
 
-<div id="move-joy" class="touch-ctrl"><div class="joy-knob"></div></div>
-<div id="look-joy" class="touch-ctrl"><div class="joy-knob"></div></div>
+<div id="debug">Debug-Konsole (F12 für mehr Infos)</div>
 
 <script type="module">
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
-import { insertCoin, myPlayer, useMultiplayerState, onPlayerJoin, onPlayerLeave, getState, setState } from 'playroomkit';
+import { insertCoin, myPlayer, useMultiplayerState, onPlayerJoin, onPlayerLeave } from 'playroomkit';
 
-const isMobile = 'ontouchstart' in window || /Mobi|Android/i.test(navigator.userAgent);
+const debug = document.getElementById('debug');
+const status = document.getElementById('status');
+const launchBtn = document.getElementById('launchBtn');
+const startScreen = document.getElementById('start-screen');
 
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x0a001f);
-scene.fog = new THREE.FogExp2(0x0a001f, 0.00018);
-
-const camera = new THREE.PerspectiveCamera(80, innerWidth/innerHeight, 0.1, 3000);
-camera.position.set(0, 1.7, 5);
-
-const renderer = new THREE.WebGLRenderer({antialias:true});
-renderer.setSize(innerWidth, innerHeight);
-renderer.shadowMap.enabled = true;
-document.body.appendChild(renderer.domElement);
+let scene, camera, renderer, controls;
+let isMobile = 'ontouchstart' in window;
+let inGame = false;
 
 // Szene Setup
-scene.add(new THREE.AmbientLight(0x4040ff, 0.5));
-const sun = new THREE.DirectionalLight(0xff88aa, 1.5);
-sun.position.set(80, 120, 60); sun.castShadow = true; scene.add(sun);
+function initThree() {
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x112233);
 
-const floor = new THREE.Mesh(new THREE.CircleGeometry(600,64), new THREE.MeshStandardMaterial({color:0x111133}));
-floor.rotation.x = -Math.PI/2; floor.receiveShadow = true; scene.add(floor);
+  camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+  camera.position.set(0, 1.6, 5);
 
-// Hindernisse
-for (let i = 0; i < 12; i++) {
-  const h = 8 + Math.random()*12;
-  const box = new THREE.Mesh(new THREE.BoxGeometry(20, h, 20), new THREE.MeshStandardMaterial({color:0x220044 + Math.random()*0x222222}));
-  box.position.set((Math.random()-0.5)*400, h/2, (Math.random()-0.5)*400);
-  box.castShadow = box.receiveShadow = true; scene.add(box);
+  renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setSize(innerWidth, innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  // Einfaches Licht + Boden
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+  const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+  sun.position.set(50, 100, 50);
+  scene.add(sun);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(1000, 1000),
+    new THREE.MeshStandardMaterial({color: 0x334455})
+  );
+  floor.rotation.x = -Math.PI / 2;
+  scene.add(floor);
+
+  // Controls
+  controls = new PointerLockControls(camera, document.body);
+  document.body.addEventListener('click', () => {
+    if (inGame) controls.lock();
+  });
 }
 
-// Waffe (Screen-Space)
-const gunGroup = new THREE.Group(); gunGroup.position.set(0.4, -0.5, -0.8); camera.add(gunGroup);
-gunGroup.add(new THREE.Mesh(new THREE.CylinderGeometry(0.06,0.08,1.2,12), new THREE.MeshStandardMaterial({color:0x333333, metalness:0.9})));
+// Playroom starten
+async function startPlayroom() {
+  status.textContent = "Starte Playroom...";
+  debug.textContent = "Versuche insertCoin() ...";
 
-// Andere Spieler Modelle (Sphären mit Farbe vom Playroom Profil)
-const otherPlayers = new Map();
-
-// Playroom Initialisierung
-async function initMultiplayer() {
-  // Deine gameId hier einfügen (aus dev.joinplayroom.com)
-  const gameId = "cd077788-e2dd-4777-a7a4-c7eea63e0b85"; // ← DEINE API / gameId
-
-  // Lobby UI zeigen + warten bis Launch
-  await insertCoin({ gameId }); // Optional: { gameId, streamMode: true } für Streamer-Modus
-
-  // Mein Spieler-State (Position, Rotation, Health)
-  const [myPos, setMyPos] = useMultiplayerState('pos', [0, 1.7, 0]);
-  const [myRot, setMyRot] = useMultiplayerState('rot', [0, 0, 0]);
-  const [myHealth, setMyHealth] = useMultiplayerState('health', 100);
-
-  // Bei Join: Neuen Spieler erstellen
-  onPlayerJoin((player) => {
-    if (player.id === myPlayer().id) return;
-    const color = player.state.color || 0x00ffff; // Aus Playroom Profil
-    const sphere = new THREE.Mesh(
-      new THREE.SphereGeometry(1.8, 16, 12),
-      new THREE.MeshStandardMaterial({color, emissive: color, emissiveIntensity: 0.4})
-    );
-    sphere.position.fromArray(player.state.pos || [0,2,0]);
-    scene.add(sphere);
-    otherPlayers.set(player.id, { mesh: sphere, player });
-    updatePlayerCount();
-  });
-
-  // Bei Leave: Entfernen
-  onPlayerLeave((player) => {
-    const data = otherPlayers.get(player.id);
-    if (data) {
-      scene.remove(data.mesh);
-      otherPlayers.delete(player.id);
-    }
-    updatePlayerCount();
-  });
-
-  // State von anderen syncen
-  setInterval(() => {
-    // Sende meine Position/Rotation
-    setMyPos(camera.position.toArray());
-    setMyRot([camera.rotation.x, camera.rotation.y, camera.rotation.z]);
-
-    // Update andere
-    otherPlayers.forEach(({mesh, player}) => {
-      if (player.state.pos) mesh.position.fromArray(player.state.pos);
-      if (player.state.rot) {
-        mesh.rotation.set(...player.state.rot);
-      }
+  try {
+    await insertCoin({
+      gameId: "cd077788-e2dd-4777-a7a4-c7eea63e0b85",
+      // skipLobby: false,           // explizit NICHT skippen
+      // maxPlayersPerRoom: 10
     });
-  }, 50); // ~20 Hz Sync – gut für FPS
 
-  function updatePlayerCount() {
-    document.getElementById('playerCount').textContent = otherPlayers.size + 1;
+    debug.textContent = "insertCoin erfolgreich – Lobby sollte jetzt erscheinen";
+    status.textContent = "Lobby geöffnet! Warte auf Spieler oder starte...";
+
+    // Nach erfolgreichem Launch → Spiel starten
+    setTimeout(() => {
+      startScreen.style.display = 'none';
+      inGame = true;
+      controls.lock();
+      animate();
+    }, 1500);
+
+  } catch (err) {
+    console.error("Playroom Fehler:", err);
+    debug.textContent = "FEHLER: " + err.message + "\n\n→ Prüfe Konsole (F12)\n→ HTTPS? GitHub Pages? AdBlocker?";
+    status.textContent = "Playroom konnte nicht starten – Fehler siehe unten";
   }
 }
 
-initMultiplayer();
+// Bewegung & Schießen (minimal)
+const move = { forward: 0, right: 0 };
+const keys = {};
 
-// Controls & Input (wie vorher, gekürzt)
-let controls;
-if (!isMobile) {
-  controls = new PointerLockControls(camera, document.body);
-  document.body.addEventListener('click', () => controls.lock());
+window.addEventListener('keydown', e => {
+  if (e.code === 'KeyW') move.forward = 1;
+  if (e.code === 'KeyS') move.forward = -1;
+  if (e.code === 'KeyA') move.right = -1;
+  if (e.code === 'KeyD') move.right = 1;
+});
+window.addEventListener('keyup', e => {
+  if (e.code === 'KeyW' || e.code === 'KeyS') move.forward = 0;
+  if (e.code === 'KeyA' || e.code === 'KeyD') move.right = 0;
+});
+
+function updateMovement(dt) {
+  const speed = 20 * dt;
+  controls.moveForward(move.forward * speed);
+  controls.moveRight(move.right * speed);
 }
 
-// Bewegung & Joystick Logik (aus vorheriger Version – hier gekürzt)
-const move = {fwd:0, right:0};
-let shooting = false;
-// ... (füge deine volle Joystick/Key-Logik hier ein, wie in der vorherigen Mobile-Version)
-
-// Schießen syncen
-const bullets = [];
-function shoot() {
-  const bullet = new THREE.Mesh(new THREE.SphereGeometry(0.12,8,8), new THREE.MeshBasicMaterial({color:0xffaa00}));
-  bullet.position.copy(camera.position);
-  bullet.velocity = new THREE.Vector3();
-  camera.getWorldDirection(bullet.velocity).multiplyScalar(120);
-  scene.add(bullet);
-  bullets.push(bullet);
-
-  // Optional: Sync Bullet via Playroom State (für echte Multiplayer-Sync – hier vereinfacht)
-}
-
-// Animate Loop
-const clock = new THREE.Clock();
+// Animate
 function animate() {
   requestAnimationFrame(animate);
-  const dt = clock.getDelta();
+  const dt = 1/60; // grobe Annäherung
 
-  // Bewegung (PointerLock oder Touch)
-  // ... (deine Bewegungscode hier)
-
-  if (shooting) shoot();
-
-  // Bullets updaten
-  for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
-    b.position.add(b.velocity.clone().multiplyScalar(dt));
-    if (b.position.length() > 1200) {
-      scene.remove(b);
-      bullets.splice(i,1);
-    }
-    // Treffer-Check gegen andere Spieler (vereinfacht)
-    otherPlayers.forEach(({mesh}) => {
-      if (b.position.distanceTo(mesh.position) < 2) {
-        // Health reduzieren – sync via setState
-        scene.remove(b); bullets.splice(i,1);
-      }
-    });
+  if (controls.isLocked && inGame) {
+    updateMovement(dt);
   }
 
   renderer.render(scene, camera);
 }
-animate();
 
 window.addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
 });
+
+// Start-Button
+launchBtn.onclick = async () => {
+  initThree();
+  await startPlayroom();
+};
+
+// Optional: Auto-Start nach 2 Sekunden (für Tests)
+setTimeout(() => {
+  if (!inGame) launchBtn.click();
+}, 2000);
 </script>
 </body>
 </html>
